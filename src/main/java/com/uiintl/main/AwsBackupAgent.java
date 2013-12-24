@@ -21,28 +21,25 @@ import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
-import com.amazonaws.services.s3.model.*;
+import com.amazonaws.services.s3.model.PutObjectRequest;
 import org.apache.commons.lang.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.io.*;
-import java.util.Arrays;
+import java.io.File;
+import java.io.FilenameFilter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Date;
 import java.util.Properties;
-import java.util.UUID;
 
 /**
- * This sample demonstrates how to make basic requests to Amazon S3 using
- * the AWS SDK for Java.
- * <p/>
- * <b>Prerequisites:</b> You must have a valid Amazon Web Services developer
- * account, and be signed up to use Amazon S3. For more information on
- * Amazon S3, see http://aws.amazon.com/s3.
- * <p/>
- * <b>Important:</b> Be sure to fill in your AWS access credentials in the
- * AwsCredentials.properties file before you try to run this
- * sample.
- * http://aws.amazon.com/security-credentials
+ * AwsBackupAgent uses AWS Sdk for Java to connect to Amazon S3 service for backing up
+ * myob files.
  */
 public class AwsBackupAgent {
+
+    private static final Logger logger = LoggerFactory.getLogger(AwsBackupAgent.class);
 
     public static final String MYOB_PATH = "myobPath";
 
@@ -67,12 +64,12 @@ public class AwsBackupAgent {
     File[] readMyobFiles() {
 
         String myobPath = properties.getProperty(MYOB_PATH);
-        System.out.println("Myob Path: " + myobPath);
+        logger.info("Myob Path: {}", myobPath);
 
-        if(StringUtils.isNotBlank(myobPath)) {
+        if (StringUtils.isNotBlank(myobPath)) {
             File f = new File(myobPath);
 
-            if(f.exists() && f.isDirectory()) {
+            if (f.exists() && f.isDirectory()) {
 
                 File[] files = f.listFiles(new FilenameFilter() {
                     @Override
@@ -91,12 +88,46 @@ public class AwsBackupAgent {
     void uploadMyobFiles() {
 
         File[] myobFiles = this.readMyobFiles();
-        String bucketName = properties.getProperty(BUCKET_NAME);
 
-        for(File myobFile : myobFiles) {
-            System.out.print("Uploading myob file: " + myobFile.getAbsolutePath() + "- ");
-            s3.putObject(new PutObjectRequest(bucketName, myobFile.getName(), myobFile));
-            System.out.println("Uploaded");
+        if (myobFiles != null && myobFiles.length > 0) {
+            logger.info("Defected {} myob files, begin to upload to S3.", myobFiles.length);
+            String bucketName = properties.getProperty(BUCKET_NAME);
+
+            long start = System.currentTimeMillis();
+            logger.info("Started at: {}", new Date());
+
+            for (File myobFile : myobFiles) {
+                try {
+                    logger.info("Uploading {}", myobFile.getAbsolutePath());
+                    s3.putObject(new PutObjectRequest(bucketName, myobFile.getName(), myobFile));
+                    logger.info("--- Success");
+
+                } catch (AmazonClientException e) {
+                    logger.error("--- Fail");
+                    handleAwsException(e);
+                }
+            }
+
+            logger.info("Finished at: {}", new Date());
+            logger.info("Total time spent in seconds: {}", (System.currentTimeMillis() - start) / 1000);
+        }
+    }
+
+    void handleAwsException(AmazonClientException ace) {
+
+        if (ace instanceof AmazonServiceException) {
+            AmazonServiceException ase = (AmazonServiceException) ace;
+
+            logger.error("Caught an AmazonServiceException, which means your request made it to Amazon S3, but was rejected with an error response for some reason.");
+            logger.error("Error Message: {}", ase.getMessage());
+            logger.error("HTTP Status Code: {}", ase.getStatusCode());
+            logger.error("AWS Error Code: {}", ase.getErrorCode());
+            logger.error("Error Type: {}", ase.getErrorType());
+            logger.error("Request ID: {}", ase.getRequestId());
+            logger.error("Stacktrace: ", ase);
+        } else {
+            logger.error("Caught an AmazonClientException, which means the client encountered a serious internal problem while trying to communicate with S3, such as not being able to access the network.");
+            logger.error("Error Message: {}", ace.getMessage());
         }
     }
 
@@ -104,24 +135,16 @@ public class AwsBackupAgent {
 
         System.out.println("===========================================");
         System.out.println("Getting started with Amazon S3");
-        System.out.println("===========================================\n");
+        System.out.println("===========================================");
+        System.out.println();
+
+        AwsBackupAgent awsBackupAgent = new AwsBackupAgent();
 
         try {
-            new AwsBackupAgent().uploadMyobFiles();
+            awsBackupAgent.uploadMyobFiles();
 
-        } catch (AmazonServiceException ase) {
-            System.out.println("Caught an AmazonServiceException, which means your request made it "
-                    + "to Amazon S3, but was rejected with an error response for some reason.");
-            System.out.println("Error Message:    " + ase.getMessage());
-            System.out.println("HTTP Status Code: " + ase.getStatusCode());
-            System.out.println("AWS Error Code:   " + ase.getErrorCode());
-            System.out.println("Error Type:       " + ase.getErrorType());
-            System.out.println("Request ID:       " + ase.getRequestId());
         } catch (AmazonClientException ace) {
-            System.out.println("Caught an AmazonClientException, which means the client encountered "
-                    + "a serious internal problem while trying to communicate with S3, "
-                    + "such as not being able to access the network.");
-            System.out.println("Error Message: " + ace.getMessage());
+            awsBackupAgent.handleAwsException(ace);
         }
     }
 }
