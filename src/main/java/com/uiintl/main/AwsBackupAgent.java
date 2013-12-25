@@ -116,7 +116,7 @@ public class AwsBackupAgent {
         File[] myobFiles = this.readMyobFiles();
 
         if (myobFiles != null && myobFiles.length > 0) {
-            logger.info("Defected {} myob files, begin to upload to S3.", myobFiles.length);
+            logger.info("Detected {} myob files, begin to upload to S3.", myobFiles.length);
             String bucketName = properties.getProperty(BUCKET_NAME);
 
             long start = System.currentTimeMillis();
