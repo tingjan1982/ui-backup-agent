@@ -22,6 +22,8 @@ import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.model.PutObjectRequest;
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +33,7 @@ import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Date;
+import java.util.Map;
 import java.util.Properties;
 
 /**
@@ -40,6 +43,8 @@ import java.util.Properties;
 public class AwsBackupAgent {
 
     private static final Logger logger = LoggerFactory.getLogger(AwsBackupAgent.class);
+
+    public static final String DEFAULT_PROPERTY = "uiintl-default.properties";
 
     public static final String MYOB_PATH = "myobPath";
 
@@ -55,10 +60,31 @@ public class AwsBackupAgent {
         Region usWest2 = Region.getRegion(Regions.AP_SOUTHEAST_2);
         s3.setRegion(usWest2);
 
-        InputStream propertyStream = getClass().getResourceAsStream("/default.properties");
-
         properties = new Properties();
+        InputStream propertyStream = getClass().getResourceAsStream("/default.properties");
         properties.load(propertyStream);
+
+        File userDefault = new File(System.getProperty("user.home"), DEFAULT_PROPERTY);
+
+        if (userDefault.exists()) {
+            InputStream is = FileUtils.openInputStream(userDefault);
+
+            try {
+                properties.load(is);
+            } finally {
+                IOUtils.closeQuietly(is);
+            }
+
+        }
+    }
+
+    void initCheck() {
+
+        logger.debug("Loaded property values...");
+
+        for (Map.Entry property : properties.entrySet()) {
+            logger.debug("{}: {}", property.getKey(), property.getValue());
+        }
     }
 
     File[] readMyobFiles() {
@@ -98,12 +124,13 @@ public class AwsBackupAgent {
 
             for (File myobFile : myobFiles) {
                 try {
+                    long fileStart = System.currentTimeMillis();
                     logger.info("Uploading {}", myobFile.getAbsolutePath());
                     s3.putObject(new PutObjectRequest(bucketName, myobFile.getName(), myobFile));
-                    logger.info("--- Success");
+                    logger.info("--- Successful. Took {} seconds", (System.currentTimeMillis() - fileStart) / 1000);
 
                 } catch (AmazonClientException e) {
-                    logger.error("--- Fail");
+                    logger.error("--- Failed");
                     handleAwsException(e);
                 }
             }
@@ -139,6 +166,7 @@ public class AwsBackupAgent {
         System.out.println();
 
         AwsBackupAgent awsBackupAgent = new AwsBackupAgent();
+        awsBackupAgent.initCheck();
 
         try {
             awsBackupAgent.uploadMyobFiles();
