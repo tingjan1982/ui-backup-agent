@@ -16,6 +16,7 @@ package com.uiintl.main;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
+import com.amazonaws.ClientConfiguration;
 import com.amazonaws.auth.ClasspathPropertiesFileCredentialsProvider;
 import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
@@ -50,13 +51,18 @@ public class AwsBackupAgent {
 
     public static final String BUCKET_NAME = "bucketName";
 
+    public static final int EXTENDED_SO_TIMEOUT = 25 * 60 * 1000;
+
     private final AmazonS3 s3;
 
     private final Properties properties;
 
     public AwsBackupAgent() throws IOException {
 
-        s3 = new AmazonS3Client(new ClasspathPropertiesFileCredentialsProvider());
+        ClientConfiguration configuration = new ClientConfiguration();
+        configuration.setSocketTimeout(EXTENDED_SO_TIMEOUT);
+
+        s3 = new AmazonS3Client(new ClasspathPropertiesFileCredentialsProvider(), configuration);
         Region usWest2 = Region.getRegion(Regions.AP_SOUTHEAST_2);
         s3.setRegion(usWest2);
 
