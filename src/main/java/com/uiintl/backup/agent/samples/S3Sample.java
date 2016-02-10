@@ -41,7 +41,7 @@ import java.util.UUID;
  */
 public class S3Sample {
 
-    public static void main(String[] args) throws IOException {
+    public static void main2(String[] args) throws IOException {
         /*
          * This credentials provider implementation loads your AWS credentials
          * from a properties file at the root of your classpath.

@@ -2,8 +2,8 @@ package com.uiintl.backup.web;
 
 import com.uiintl.backup.agent.AwsBackupAgent;
 import com.uiintl.backup.agent.BackupState;
+import com.uiintl.backup.config.BackupProperties;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
@@ -18,18 +18,14 @@ public class BackupController {
     @Autowired
     private AwsBackupAgent awsBackupAgent;
 
-    @Value("${backupPath}")
-    private String backupPath;
-
-    @Value("${bucketName}")
-    private String bucketName;
-
+    @Autowired
+    private BackupProperties backupProperties;
 
     @RequestMapping(method = RequestMethod.GET)
-    public BackupResponse backupFiles() {
+    public BackupResponse onDemandBackupFiles() {
 
         long start = System.currentTimeMillis();
-        BackupState backupState = this.awsBackupAgent.uploadFiles(this.backupPath, this.bucketName);
+        BackupState backupState = this.awsBackupAgent.uploadFiles(this.backupProperties.getBackupPath(), this.backupProperties.getBucketName());
         long duration = System.currentTimeMillis() - start;
 
         return new BackupResponse(backupState, "Duration in milliseconds: " + duration);
