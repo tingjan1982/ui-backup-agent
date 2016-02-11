@@ -1,6 +1,8 @@
 package com.uiintl.backup.scheduler;
 
+import com.google.gson.Gson;
 import com.uiintl.backup.agent.AwsBackupAgent;
+import com.uiintl.backup.agent.BackupResponse;
 import com.uiintl.backup.config.BackupProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,12 +24,14 @@ public class BackupScheduler {
     @Autowired
     private BackupProperties backupProperties;
 
-    /**
-     * Midnight of every weekday.
-     */
     @Scheduled(cron = "${scheduler.backup.cron}")
     public void scheduleBackup() {
         logger.info("Backup triggered by scheduler.");
-        this.awsBackupAgent.uploadFiles(this.backupProperties.getBackupPath(), this.backupProperties.getBucketName());
+        BackupResponse backupResponse = this.awsBackupAgent.uploadFiles(this.backupProperties.getBackupPath(), this.backupProperties.getBucketName());
+
+        Gson gson = new Gson();
+        String responseJson = gson.toJson(backupResponse);
+
+        logger.info(responseJson);
     }
 }

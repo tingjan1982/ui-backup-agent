@@ -34,7 +34,7 @@ import java.util.Date;
 
 /**
  * AwsBackupAgent uses AWS Sdk for Java to connect to Amazon S3 service for backing up
- * myob files.
+ * files.
  */
 @Component
 public class AwsBackupAgent {
@@ -46,7 +46,6 @@ public class AwsBackupAgent {
     private AmazonS3 s3;
 
     public AwsBackupAgent() throws IOException {
-
         this.initS3Client();
     }
 
@@ -77,10 +76,11 @@ public class AwsBackupAgent {
         return null;
     }
 
-    public BackupState uploadFiles(final String backupPath, final String bucketName) {
+    public BackupResponse uploadFiles(final String backupPath, final String bucketName) {
 
         File[] files = this.readFiles(backupPath);
         BackupState backupState = BackupState.NO_FILE;
+        BackupResponse.BackupResponseBuilder builder = BackupResponse.BackupResponseBuilder.builder();
 
         if (files != null && files.length > 0) {
             logger.info("Detected {} files, begin uploading to S3.", files.length);
@@ -94,7 +94,7 @@ public class AwsBackupAgent {
                     long fileStart = System.currentTimeMillis();
                     logger.info("Uploading: {}", file.getAbsolutePath());
                     s3.putObject(new PutObjectRequest(bucketName, file.getName(), file));
-                    logger.info("Successful. Took {} seconds", (System.currentTimeMillis() - fileStart) / 1000);
+                    logger.info("Successful. Took {} milliseconds", (System.currentTimeMillis() - fileStart));
 
                 } catch (AmazonClientException e) {
                     logger.error("Error occurred: {}", e.getMessage(), e);
@@ -103,8 +103,9 @@ public class AwsBackupAgent {
                 }
             }
 
+            long duration = System.currentTimeMillis() - start;
             logger.info("Finished at: {}", new Date());
-            logger.info("Total time spent in milliseconds: {}", (System.currentTimeMillis() - start));
+            logger.info("Total time spent in milliseconds: {}", duration);
 
             if (failCount == 0) {
                 backupState = BackupState.SUCCESS;
@@ -113,9 +114,15 @@ public class AwsBackupAgent {
             } else {
                 backupState = BackupState.FAIL;
             }
+
+            builder.setBackupState(backupState)
+                    .setTotalFiles(files.length)
+                    .setUploadedFiles(files.length - failCount)
+                    .setMessage("Finished. Duration is " + duration);
+
         }
 
-        return backupState;
+        return builder.build();
     }
 
     void handleAwsException(AmazonClientException ace) {
