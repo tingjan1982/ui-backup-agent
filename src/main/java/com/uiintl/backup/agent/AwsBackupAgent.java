@@ -115,13 +115,11 @@ public class AwsBackupAgent {
                 backupState = BackupState.FAIL;
             }
 
-            builder.setBackupState(backupState)
-                    .setTotalFiles(files.length)
-                    .setUploadedFiles(files.length - failCount)
-                    .setMessage("Finished. Duration is " + duration);
+            builder.setTotalFiles(files.length).setUploadedFiles(files.length - failCount).setMessage("Finished. Duration is " + duration);
 
         }
 
+        builder.setBackupState(backupState);
         return builder.build();
     }
 
