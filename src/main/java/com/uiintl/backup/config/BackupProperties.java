@@ -1,5 +1,6 @@
 package com.uiintl.backup.config;
 
+import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -8,25 +9,10 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @ConfigurationProperties(prefix = "backup")
+@Data
 public class BackupProperties {
 
     private String bucketName;
 
     private String backupPath;
-
-    public String getBucketName() {
-        return bucketName;
-    }
-
-    public void setBucketName(String bucketName) {
-        this.bucketName = bucketName;
-    }
-
-    public String getBackupPath() {
-        return backupPath;
-    }
-
-    public void setBackupPath(String backupPath) {
-        this.backupPath = backupPath;
-    }
 }

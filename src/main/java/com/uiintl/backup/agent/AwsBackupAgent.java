@@ -16,128 +16,164 @@ package com.uiintl.backup.agent;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
-import com.amazonaws.ClientConfiguration;
-import com.amazonaws.auth.ClasspathPropertiesFileCredentialsProvider;
-import com.amazonaws.regions.Region;
-import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amazonaws.services.s3.model.PutObjectRequest;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StopWatch;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.io.IOException;
-import java.util.Date;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+
 
 /**
- * AwsBackupAgent uses AWS Sdk for Java to connect to Amazon S3 service for backing up
- * files.
+ * AwsBackupAgent uses AWS Sdk for Java to connect to Amazon S3 to upload files.
  */
 @Component
 public class AwsBackupAgent {
 
-    private static final Logger logger = LoggerFactory.getLogger(AwsBackupAgent.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(AwsBackupAgent.class);
 
-    public static final int EXTENDED_SO_TIMEOUT = 25 * 60 * 1000;
+    private final AmazonS3 s3;
 
-    private AmazonS3 s3;
+    private final ResourceLoader resourceLoader;
 
-    public AwsBackupAgent() throws IOException {
-        this.initS3Client();
-    }
-
-    void initS3Client() {
-
-        ClientConfiguration configuration = new ClientConfiguration();
-        configuration.setSocketTimeout(EXTENDED_SO_TIMEOUT);
-
-        s3 = new AmazonS3Client(new ClasspathPropertiesFileCredentialsProvider(), configuration);
-        Region usWest2 = Region.getRegion(Regions.AP_SOUTHEAST_2);
-        s3.setRegion(usWest2);
-    }
-
-    File[] readFiles(final String filePath) {
-
-        logger.info("Reading files from file path:: {}", filePath);
-
-        if (StringUtils.isNotBlank(filePath)) {
-            File f = new File(filePath);
-
-            if (f.exists() && f.isDirectory()) {
-
-                return f.listFiles();
-            }
-        }
-
-        logger.info("No file was found in file path: {}", filePath);
-        return null;
+    @Autowired
+    public AwsBackupAgent(final AmazonS3 s3, final ResourceLoader resourceLoader) {
+        this.s3 = s3;
+        this.resourceLoader = resourceLoader;
     }
 
     public BackupResponse uploadFiles(final String backupPath, final String bucketName) {
 
-        File[] files = this.readFiles(backupPath);
-        BackupState backupState = BackupState.NO_FILE;
-        BackupResponse.BackupResponseBuilder builder = BackupResponse.BackupResponseBuilder.builder();
+        BackupResponse.BackupState backupState = BackupResponse.BackupState.NO_FILE;
+        int uploadFiles = 0;
+        final List<PutObjectRequest> putObjectRequests = this.readFiles(backupPath, bucketName);
 
-        if (files != null && files.length > 0) {
-            logger.info("Detected {} files, begin uploading to S3.", files.length);
+        if (!CollectionUtils.isEmpty(putObjectRequests)) {
+            LOGGER.info("Found {} files, initiate file upload to S3.", putObjectRequests.size());
 
-            long start = System.currentTimeMillis();
-            logger.info("Started at: {}", new Date());
-            int failCount = 0;
+            final StopWatch overallUpload = new StopWatch();
+            overallUpload.start("MYOB File Upload");
 
-            for (File file : files) {
+            for (PutObjectRequest putObjectRequest : putObjectRequests) {
                 try {
                     long fileStart = System.currentTimeMillis();
-                    logger.info("Uploading: {}", file.getAbsolutePath());
-                    s3.putObject(new PutObjectRequest(bucketName, file.getName(), file));
-                    logger.info("Successful. Took {} milliseconds", (System.currentTimeMillis() - fileStart));
+                    LOGGER.info("Uploading: {}", putObjectRequest.getKey());
+
+                    s3.putObject(putObjectRequest);
+
+                    LOGGER.info("Successful. Took {} milliseconds", (System.currentTimeMillis() - fileStart));
+                    uploadFiles++;
 
                 } catch (AmazonClientException e) {
-                    logger.error("Error occurred: {}", e.getMessage(), e);
+                    LOGGER.error("Error while uploading file {}: {}", putObjectRequest.getKey(), e.getMessage(), e);
                     handleAwsException(e);
-                    failCount++;
                 }
             }
 
-            long duration = System.currentTimeMillis() - start;
-            logger.info("Finished at: {}", new Date());
-            logger.info("Total time spent in milliseconds: {}", duration);
+            overallUpload.stop();
+            LOGGER.info(overallUpload.prettyPrint());
 
-            if (failCount == 0) {
-                backupState = BackupState.SUCCESS;
-            } else if (failCount > 0 && failCount < files.length) {
-                backupState = BackupState.PARTIAL_FAIL;
+            if (uploadFiles == putObjectRequests.size()) {
+                backupState = BackupResponse.BackupState.SUCCESS;
+
+            } else if (uploadFiles > 0) {
+                backupState = BackupResponse.BackupState.PARTIAL_FAIL;
+
             } else {
-                backupState = BackupState.FAIL;
+                backupState = BackupResponse.BackupState.FAIL;
             }
-
-            builder.setTotalFiles(files.length).setUploadedFiles(files.length - failCount).setMessage("Finished. Duration is " + duration);
-
         }
 
-        builder.setBackupState(backupState);
-        return builder.build();
+        return new BackupResponse(backupState, putObjectRequests.size(), uploadFiles);
     }
 
-    void handleAwsException(AmazonClientException ace) {
+    /**
+     * Loading file inside jar:
+     * https://stackoverflow.com/questions/14876836/file-inside-jar-is-not-visible-for-spring
+     *
+     * Subdirectories in AWS S3:
+     * https://stackoverflow.com/questions/11491304/amazon-web-services-aws-s3-java-create-a-sub-directory-object
+     */
+    private List<PutObjectRequest> readFiles(final String backupPath, final String bucketName) {
+
+        try {
+            LOGGER.info("Attempt to load resources from specified path: {}", backupPath);
+
+            if (StringUtils.isBlank(backupPath)) {
+                throw new RuntimeException("Backup path should not be blank");
+            }
+
+            List<PutObjectRequest> objectRequests = new ArrayList<>();
+
+            final Resource resource = resourceLoader.getResource(backupPath);
+
+            if (!resource.isFile()) {
+                final InputStream inputStream = resource.getInputStream();
+                final byte[] bytes = inputStream.readAllBytes();
+                ObjectMetadata metadata = new ObjectMetadata();
+                metadata.setContentLength(bytes.length);
+                
+                objectRequests.add(new PutObjectRequest(bucketName, backupPath, new ByteArrayInputStream(bytes), metadata));
+
+            } else {
+                final File backupFileRoot = resource.getFile();
+
+                if (backupFileRoot.exists()) {
+                    addFilesRecursively(objectRequests, bucketName, backupFileRoot.getAbsolutePath(), backupFileRoot);
+                }
+            }
+
+            return objectRequests;
+
+        } catch (Exception e) {
+            throw new RuntimeException(e.getMessage(), e);
+        }
+    }
+
+    private void addFilesRecursively(final List<PutObjectRequest> objectRequests, final String bucketName, final String backupRoot, final File filePath) {
+
+        if (filePath.isDirectory()) {
+            final File[] files = filePath.listFiles();
+
+            if (files != null) {
+                for (final File file : files) {
+                    this.addFilesRecursively(objectRequests, bucketName, backupRoot, file);
+                }
+            }
+
+        } else {
+            final String fileKey = filePath.getAbsolutePath().replace(backupRoot, "").substring(1);
+            objectRequests.add(new PutObjectRequest(bucketName, fileKey, filePath));
+        }
+    }
+
+    private void handleAwsException(AmazonClientException ace) {
 
         if (ace instanceof AmazonServiceException) {
             AmazonServiceException ase = (AmazonServiceException) ace;
 
-            logger.error("Caught an AmazonServiceException, which means your request made it to Amazon S3, but was rejected with an error response for some reason.");
-            logger.error("Error Message: {}", ase.getMessage());
-            logger.error("HTTP Status Code: {}", ase.getStatusCode());
-            logger.error("AWS Error Code: {}", ase.getErrorCode());
-            logger.error("Error Type: {}", ase.getErrorType());
-            logger.error("Request ID: {}", ase.getRequestId());
-            logger.error("Stacktrace: ", ase);
+            LOGGER.error("Caught an AmazonServiceException, which means your request made it to Amazon S3, but was rejected with an error response for some reason.");
+            LOGGER.error("Error Message: {}", ase.getMessage());
+            LOGGER.error("HTTP Status Code: {}", ase.getStatusCode());
+            LOGGER.error("AWS Error Code: {}", ase.getErrorCode());
+            LOGGER.error("Error Type: {}", ase.getErrorType());
+            LOGGER.error("Request ID: {}", ase.getRequestId());
+            LOGGER.error("Stacktrace: ", ase);
         } else {
-            logger.error("Caught an AmazonClientException, which means the client encountered a serious internal problem while trying to communicate with S3, such as not being able to access the network.");
-            logger.error("Error Message: {}", ace.getMessage());
+            LOGGER.error("Caught an AmazonClientException, which means the client encountered a serious internal problem while trying to communicate with S3, such as not being able to access the network.");
+            LOGGER.error("Error Message: {}", ace.getMessage());
         }
     }
 }
