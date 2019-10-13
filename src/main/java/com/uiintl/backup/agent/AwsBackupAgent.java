@@ -154,7 +154,9 @@ public class AwsBackupAgent {
             }
 
         } else {
-            final String fileKey = filePath.getAbsolutePath().replace(backupRoot, "").substring(1);
+            final String trimmedFileKey = filePath.getAbsolutePath().replace(backupRoot, "");
+            final String fileKey = StringUtils.isNotBlank(trimmedFileKey) ? trimmedFileKey.substring(1) : filePath.getName();
+            
             objectRequests.add(new PutObjectRequest(bucketName, fileKey, filePath));
         }
     }

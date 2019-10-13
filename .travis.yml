@@ -1,0 +1,18 @@
+language: ruby
+
+services:
+  - docker
+
+## reference on file encryption in travis: https://docs.travis-ci.com/user/encrypting-files/
+before_install:
+  - docker pull amazoncorretto:11
+
+script:
+  - docker run --rm -v $TRAVIS_BUILD_DIR:/source -v artifact_volume:/artifact_volume amazoncorretto:11 /bin/sh -c "cd /source ; ./gradlew clean build -x test"
+
+
+after_script:
+  - docker build -t joelin/nextpos-service:latest --build-arg JAR_FILE=build/libs/ui-backup-agent-1.0-SNAPSHOT.jar .
+  - echo $DOCKER_PASSWORD | docker login -u "$DOCKER_USERNAME" --password-stdin
+  - docker push joelin/nextpos-service:latest
+  

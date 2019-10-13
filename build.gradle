@@ -1,6 +1,7 @@
 plugins {
     id 'java'
     id 'org.springframework.boot' version '2.1.9.RELEASE'
+    id 'com.palantir.docker' version '0.22.1'
 }
 
 apply plugin: 'io.spring.dependency-management'
@@ -30,4 +31,14 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok'
 
     testCompile group: 'junit', name: 'junit', version: '4.12'
+}
+
+/**
+ * Gradle Docker plugin: https://github.com/palantir/gradle-docker
+ */
+docker {
+    dependsOn build
+    name "joelin/${bootJar.archiveBaseName.get()}:latest"
+    files bootJar.archiveFile.get()
+    buildArgs(['JAR_FILE': "${bootJar.archiveFileName.get()}"])
 }

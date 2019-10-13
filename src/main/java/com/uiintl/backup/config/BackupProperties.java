@@ -12,6 +12,8 @@ import org.springframework.stereotype.Component;
 @Data
 public class BackupProperties {
 
+    private String credentialFilePath;
+
     private String bucketName;
 
     private String backupPath;
