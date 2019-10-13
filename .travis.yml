@@ -12,7 +12,7 @@ script:
 
 
 after_script:
-  - docker build -t joelin/nextpos-service:latest --build-arg JAR_FILE=build/libs/ui-backup-agent-1.0-SNAPSHOT.jar .
+  - docker build -t joelin/ui-backup-agent:latest --build-arg JAR_FILE=build/libs/ui-backup-agent-1.0-SNAPSHOT.jar .
   - echo $DOCKER_PASSWORD | docker login -u "$DOCKER_USERNAME" --password-stdin
-  - docker push joelin/nextpos-service:latest
+  - docker push joelin/ui-backup-agent:latest
   
