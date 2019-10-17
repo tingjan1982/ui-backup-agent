@@ -5,16 +5,15 @@ import com.uiintl.backup.agent.BackupResponse;
 import com.uiintl.backup.config.BackupProperties;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 /**
  * Created by jlin on 2016/2/10.
  */
 @RestController
-@RequestMapping("/backup")
+@RequestMapping("/backups")
 public class BackupController {
 
     private final AwsBackupAgent awsBackupAgent;
@@ -27,12 +26,24 @@ public class BackupController {
         this.backupProperties = backupProperties;
     }
 
-    @GetMapping
+    @PostMapping
     public BackupResponse onDemandBackupFiles(@RequestParam(value = "path", required = false) String filePath) {
 
         String backupPath = StringUtils.isNotBlank(filePath) ? filePath : backupProperties.getBackupPath();
 
         return this.awsBackupAgent.uploadFiles(backupPath, backupProperties.getBucketName());
+    }
+
+    @GetMapping("/{id}")
+    public BackupResponse getBackupResponse(@PathVariable final String id) {
+
+        return awsBackupAgent.getBackupResponse(id).orElseThrow();
+    }
+
+    @GetMapping
+    public List<BackupResponse> listHistoricalBackups() {
+
+        return awsBackupAgent.listBackupResponses();
     }
 
 }

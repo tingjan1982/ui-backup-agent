@@ -16,9 +16,15 @@ package com.uiintl.backup.agent;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
+import com.amazonaws.event.ProgressEvent;
+import com.amazonaws.event.ProgressListener;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amazonaws.services.s3.model.PutObjectRequest;
+import com.amazonaws.services.s3.transfer.TransferManager;
+import com.amazonaws.services.s3.transfer.TransferManagerBuilder;
+import com.amazonaws.services.s3.transfer.TransferProgress;
+import com.amazonaws.services.s3.transfer.Upload;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,8 +38,10 @@ import org.springframework.util.StopWatch;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 
 /**
@@ -48,6 +56,13 @@ public class AwsBackupAgent {
 
     private final ResourceLoader resourceLoader;
 
+    private final LinkedHashMap<String, BackupResponse> responses = new LinkedHashMap<>(10) {
+        @Override
+        protected boolean removeEldestEntry(final Map.Entry<String, BackupResponse> eldest) {
+            return this.size() > 10;
+        }
+    };
+
     @Autowired
     public AwsBackupAgent(final AmazonS3 s3, final ResourceLoader resourceLoader) {
         this.s3 = s3;
@@ -56,53 +71,79 @@ public class AwsBackupAgent {
 
     public BackupResponse uploadFiles(final String backupPath, final String bucketName) {
 
-        BackupResponse.BackupState backupState = BackupResponse.BackupState.NO_FILE;
-        int uploadFiles = 0;
+        AtomicInteger uploadedFiles = new AtomicInteger(0);
         final List<PutObjectRequest> putObjectRequests = this.readFiles(backupPath, bucketName);
 
-        if (!CollectionUtils.isEmpty(putObjectRequests)) {
-            LOGGER.info("Found {} files, initiate file upload to S3.", putObjectRequests.size());
+        final String id = UUID.randomUUID().toString();
+        final BackupResponse backupResponse = new BackupResponse(id, new Date(), BackupResponse.BackupState.STARTED, putObjectRequests.size(), uploadedFiles);
+        responses.put(id, backupResponse);
 
-            final StopWatch overallUpload = new StopWatch();
-            overallUpload.start("MYOB File Upload");
+        CompletableFuture.runAsync(() -> {
+            if (!CollectionUtils.isEmpty(putObjectRequests)) {
+                LOGGER.info("Found {} files, initiate file upload to S3.", putObjectRequests.size());
 
-            for (PutObjectRequest putObjectRequest : putObjectRequests) {
-                try {
-                    long fileStart = System.currentTimeMillis();
-                    LOGGER.info("Uploading: {}", putObjectRequest.getKey());
+                final TransferManager transferManager = TransferManagerBuilder.standard()
+                        .withS3Client(s3)
+                        .withMultipartUploadThreshold((long) (5 * 1024 * 1025))
+                        .build();
 
-                    s3.putObject(putObjectRequest);
+                final StopWatch overallUpload = new StopWatch("MYOB Backup");
 
-                    LOGGER.info("Successful. Took {} milliseconds", (System.currentTimeMillis() - fileStart));
-                    uploadFiles++;
+                for (PutObjectRequest putObjectRequest : putObjectRequests) {
+                    try {
+                        LOGGER.info("Uploading {}", putObjectRequest.getKey());
 
-                } catch (AmazonClientException e) {
-                    LOGGER.error("Error while uploading file {}: {}", putObjectRequest.getKey(), e.getMessage(), e);
-                    handleAwsException(e);
+                        overallUpload.start(putObjectRequest.getKey());
+
+                        final Upload upload = transferManager.upload(putObjectRequest);
+                        final TransferProgress progress = upload.getProgress();
+                        upload.addProgressListener(new ProgressTracker(putObjectRequest.getKey(), progress.getTotalBytesToTransfer()));
+                        upload.waitForCompletion();
+                        overallUpload.stop();
+
+                        LOGGER.info("Completed: {}", overallUpload.prettyPrint());
+                        uploadedFiles.incrementAndGet();
+
+                    } catch (AmazonClientException e) {
+                        LOGGER.error("Error while uploading file {}: {}", putObjectRequest.getKey(), e.getMessage(), e);
+                        handleAwsException(e);
+                    } catch (Exception e) {
+                        LOGGER.error("General exception: {}", e.getMessage(), e);
+                    }
                 }
+
+                LOGGER.info(overallUpload.prettyPrint());
+                BackupResponse.BackupState backupState;
+
+                if (uploadedFiles.get() == putObjectRequests.size()) {
+                    backupState = BackupResponse.BackupState.SUCCESS;
+
+                } else if (uploadedFiles.get() > 0) {
+                    backupState = BackupResponse.BackupState.PARTIAL_FAIL;
+
+                } else {
+                    backupState = BackupResponse.BackupState.FAIL;
+                }
+
+                backupResponse.setBackupState(backupState);
             }
+        });
 
-            overallUpload.stop();
-            LOGGER.info(overallUpload.prettyPrint());
+        return backupResponse;
+    }
 
-            if (uploadFiles == putObjectRequests.size()) {
-                backupState = BackupResponse.BackupState.SUCCESS;
+    public Optional<BackupResponse> getBackupResponse(String id) {
+        return Optional.ofNullable(responses.get(id));
+    }
 
-            } else if (uploadFiles > 0) {
-                backupState = BackupResponse.BackupState.PARTIAL_FAIL;
-
-            } else {
-                backupState = BackupResponse.BackupState.FAIL;
-            }
-        }
-
-        return new BackupResponse(backupState, putObjectRequests.size(), uploadFiles);
+    public List<BackupResponse> listBackupResponses() {
+        return new ArrayList<>(responses.values());
     }
 
     /**
      * Loading file inside jar:
      * https://stackoverflow.com/questions/14876836/file-inside-jar-is-not-visible-for-spring
-     *
+     * <p>
      * Subdirectories in AWS S3:
      * https://stackoverflow.com/questions/11491304/amazon-web-services-aws-s3-java-create-a-sub-directory-object
      */
@@ -124,7 +165,7 @@ public class AwsBackupAgent {
                 final byte[] bytes = inputStream.readAllBytes();
                 ObjectMetadata metadata = new ObjectMetadata();
                 metadata.setContentLength(bytes.length);
-                
+
                 objectRequests.add(new PutObjectRequest(bucketName, backupPath, new ByteArrayInputStream(bytes), metadata));
 
             } else {
@@ -156,7 +197,7 @@ public class AwsBackupAgent {
         } else {
             final String trimmedFileKey = filePath.getAbsolutePath().replace(backupRoot, "");
             final String fileKey = StringUtils.isNotBlank(trimmedFileKey) ? trimmedFileKey.substring(1) : filePath.getName();
-            
+
             objectRequests.add(new PutObjectRequest(bucketName, fileKey, filePath));
         }
     }
@@ -176,6 +217,28 @@ public class AwsBackupAgent {
         } else {
             LOGGER.error("Caught an AmazonClientException, which means the client encountered a serious internal problem while trying to communicate with S3, such as not being able to access the network.");
             LOGGER.error("Error Message: {}", ace.getMessage());
+        }
+    }
+
+    static class ProgressTracker implements ProgressListener {
+
+        private AtomicLong bytesTransferred = new AtomicLong(0);
+
+        private String key;
+
+        private final long totalBytes;
+
+        ProgressTracker(final String key, final long totalBytes) {
+            this.key = key;
+            this.totalBytes = totalBytes;
+        }
+
+        @Override
+        public void progressChanged(final ProgressEvent progressEvent) {
+            final long transferred = bytesTransferred.addAndGet(progressEvent.getBytesTransferred());
+            final int percentage = Math.round(((float) bytesTransferred.get() / totalBytes) * 100);
+
+            System.out.printf("%s: %s/%s bytes %s%%\r", key, transferred, totalBytes, percentage);
         }
     }
 }

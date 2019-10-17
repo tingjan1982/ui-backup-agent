@@ -32,7 +32,8 @@ public class BackupScheduler {
     @Scheduled(cron = "${scheduler.backup.cron}")
     public void scheduleBackup() {
 
-        logger.info("Backup triggered at {}", new Date());
+        logger.info("Triggering backup at {}", new Date());
+
         BackupResponse backupResponse = this.awsBackupAgent.uploadFiles(this.backupProperties.getBackupPath(), this.backupProperties.getBucketName());
 
         logger.info("{}", backupResponse);
