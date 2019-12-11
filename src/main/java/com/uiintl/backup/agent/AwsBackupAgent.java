@@ -46,6 +46,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * AwsBackupAgent uses AWS Sdk for Java to connect to Amazon S3 to upload files.
+ *
+ * https://www.baeldung.com/aws-s3-multipart-upload
  */
 @Component
 public class AwsBackupAgent {
@@ -78,7 +80,7 @@ public class AwsBackupAgent {
         final BackupResponse backupResponse = new BackupResponse(id, new Date(), BackupResponse.BackupState.STARTED, putObjectRequests.size(), uploadedFiles);
         responses.put(id, backupResponse);
 
-        CompletableFuture.runAsync(() -> {
+        CompletableFuture.supplyAsync(() -> {
             if (!CollectionUtils.isEmpty(putObjectRequests)) {
                 LOGGER.info("Found {} files, initiate file upload to S3.", putObjectRequests.size());
 
@@ -126,8 +128,13 @@ public class AwsBackupAgent {
                 }
 
                 backupResponse.setBackupState(backupState);
+            } else {
+                backupResponse.setBackupState(BackupResponse.BackupState.NO_FILE);
             }
-        });
+
+            return backupResponse;
+
+        }).thenAccept(response -> LOGGER.info("Backup complete: {}", response));
 
         return backupResponse;
     }
